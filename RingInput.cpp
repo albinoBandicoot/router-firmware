@@ -52,3 +52,7 @@ int RingInput::push (char *src) {
   return 0;
 }
 
+char RingInput::peek_id () {
+  if (isEmpty()) return 0;
+  return buf[readptr][1];
+}

@@ -1,26 +1,22 @@
 /* Configuration for the router. Includes things like bed size, acceleration
  * settings, etc.
  *
- * All units in the firmware are in STEPS! Configure steps/mm in the configuration
- * for the HOST. However, if steps/mm changes (for instance, if microstepping
- * changes), make sure to update the bed sizes here!
+ * All units are in millimeters. In the 16-bit fixed point position representation, 
+ * each step is 0.01mm = 0.000393 inches (4 ten-thousandths). 
 */
 
-#define BAUDRATE 115200
+#define BAUDRATE 9600
 
-#define XSTEPS_PER_MM 80
-#define YSTEPS_PER_MM 80
-#define ZSTEPS_PER_MM 320
+#define XMAX 390
+#define YMAX 390
+#define ZMAX 100
 
-#define XMAX (XSTEPS_PER_MM * 390)
-#define YMAX (YSTEPS_PER_MM * 390)
-#define ZMAX (ZSTEPS_PER_MM * 100)
+const unsigned int STEPS_PER_UNIT[3] =  {80, 80, 320};
 
-#define HOMING_FEEDRATE 1000
+#define HOMING_DELAY_US_PER_STEP 1000
+const unsigned int MAX_FEEDRATE[3] = {25, 25, 20};
 
-#define XMAX_FEEDRATE (XSTEPS_PER_MM * 25)
-#define YMAX_FEEDRATE (YSTEPS_PER_MM * 25)
-#define ZMAX_FEEDRATE (ZSTEPS_PER_MM * 20)
+const unsigned int COORD_MAX[3] = {390, 390, 100};
 
 #define INVERT_X false
 #define INVERT_Y false

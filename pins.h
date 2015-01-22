@@ -3,18 +3,21 @@
 #ifndef PINS_H
 #define PINS_H
 
-#define PIN_XSTEP  3
-#define PIN_YSTEP  4
-#define PIN_ZSTEP  5
-#define PIN_XDIR   6
-#define PIN_YDIR   7
-#define PIN_ZDIR   8
-#define PIN_ENABLE  2
+#define XSTEP  3
+#define YSTEP  4
+#define ZSTEP  5
+#define XDIR   6
+#define YDIR   7
+#define ZDIR   8
+#define ENABLE  2
 
-#define PIN_XLIMIT  10
-#define PIN_YLIMIT  11
-#define PIN_ZLIMIT  12
+// note: all limit switch pins must be in the 8-13 group
+#define XLIMIT  10
+#define YLIMIT  11
+#define ZLIMIT  12
 
 //#define PIN_SPINDLE_SPEED
+#define PIEZO 13
+
 
 #endif

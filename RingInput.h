@@ -5,7 +5,7 @@
 #define INBUF_SIZE 16
 #define OUTBUF_SIZE 16
 
-#define COMMAND_SIZE 8  // number of bytes in a command
+#define COMMAND_SIZE 11  // number of bytes in a command
 
 class RingInput {
   private:
@@ -20,6 +20,7 @@ class RingInput {
     int freeSpace ();
     int pop (char *);
     int push (char *);
+    char peek_id ();
 };
 
 extern RingInput input;
