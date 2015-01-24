@@ -9,7 +9,7 @@
 
 class RingInput {
   private:
-    char buf[INBUF_SIZE][COMMAND_SIZE];
+    unsigned char buf[INBUF_SIZE][COMMAND_SIZE];
   public:
     char readptr;
     char writeptr;
@@ -18,8 +18,8 @@ class RingInput {
     boolean isEmpty();
     boolean isFull();
     int freeSpace ();
-    int pop (char *);
-    int push (char *);
+    int pop (unsigned char *);
+    int push (unsigned char *);
     char peek_id ();
 };
 

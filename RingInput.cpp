@@ -24,7 +24,7 @@ int RingInput::freeSpace () {
 // pops a command off the ring buffer 'inbuf', reading from readptr. 
 // stores the result in 'dest,' which must be at least COMMAND_SIZE bytes
 // returns 0 on success, -1 otherwise (eg, if the buffer is empty)
-int RingInput::pop (char *dest) {
+int RingInput::pop (unsigned char *dest) {
   if (readptr == writeptr) {  // buffer empty
     return -1;
   }
@@ -37,7 +37,7 @@ int RingInput::pop (char *dest) {
   return 0;
 }
 
-int RingInput::push (char *src) {
+int RingInput::push (unsigned char *src) {
   char w = writeptr+1;
   if (w >= INBUF_SIZE) w = 0;
   if (w == readptr) {  // buffer is full.
