@@ -7,20 +7,19 @@
 
 #define BAUDRATE 9600
 
-#define XMAX 390
+#define XMAX 375
 #define YMAX 390
-#define ZMAX 100
+#define ZMAX 80
+const unsigned int COORD_MAX[3] = {XMAX, YMAX, ZMAX};
 
-const unsigned int STEPS_PER_UNIT[3] =  {160, 80, 320};
+const unsigned int STEPS_PER_UNIT[3] =  {80, 80, 320};
 
-#define HOMING_STEP_DELAY 1000
-#define SLOW_HOMING_STEP_DELAY 4000
+#define HOMING_STEP_DELAY 2000			// = 6.25 mm/sec for x and y axes, 1.5625 mm/sec for Z
+#define SLOW_HOMING_STEP_DELAY 8000		// = 1.5625 mm/sec for x and y, 0.39 mm/sec for Z
 
-const unsigned int COORD_MAX[3] = {390, 390, 100};
-
-#define INVERT_X false
-#define INVERT_Y false
-#define INVERT_Z false
+#define INVERT_X true
+#define INVERT_Y true
+#define INVERT_Z true
 
 const bool INVERT[3] = {INVERT_X, INVERT_Y, INVERT_Z};
 

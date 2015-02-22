@@ -2,8 +2,7 @@
 #define RingInput_H
 #include <Arduino.h>
 
-#define INBUF_SIZE 16
-#define OUTBUF_SIZE 16
+#define INBUF_SIZE 16	// number of commands in the input buffer
 
 #define COMMAND_SIZE 11  // number of bytes in a command
 
@@ -21,6 +20,7 @@ class RingInput {
     int pop (unsigned char *);
     int push (unsigned char *);
     char peek_id ();
+    void clear ();
 };
 
 extern RingInput input;

@@ -19,7 +19,8 @@ const int DIR[3]  = {XDIR, YDIR, ZDIR};
 #define YLIMIT  11
 #define ZLIMIT  12
 
-#define RESUME 9
+// the resume pin must NOT be in the 8-13 group
+#define RESUME A2  // if you change this: make sure to update the interrupt setup in Motion.cpp
 #define RESUME_LED 13
 
 #define SPINDLE_SPEED A0  // for reading; can't set speed through this.
