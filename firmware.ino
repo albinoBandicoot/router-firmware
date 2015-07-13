@@ -29,7 +29,7 @@ volatile boolean command_received = false;  // ISR sets true when a complete com
 
 volatile boolean command_running = false;
 
-unsigned char acknum = 0;    
+unsigned int acknum = 0;    
 
 // this is the main loop. Of course, this may be getting interrupted left and right by the motion timer
 // or communications interrupts.
@@ -111,9 +111,10 @@ void serialEvent () {
     }
 }
 
-void ack (char id) {
+void ack (unsigned int id) {
   Serial.write ('a');
-  Serial.write (id);
+  Serial.write (id & 0xff);
+  Serial.write (id >> 8);
 }
 
 /* Here is the timer interrupt. It is a little yucky because everything that uses the 16-bit timer interrupt has to
@@ -152,6 +153,26 @@ ISR (TIMER1_COMPA_vect) {
   }
 }
 
+float getFloat (char *x) {
+  unsigned long f = (((unsigned long) x[0]) << 24) | (((unsigned long) x[1]) << 16) | (((unsigned long) x[2]) << 8) | ((unsigned long) x[3]);
+  return * ((float *) &f);
+}
+
+void response_header (int id, int len) {
+  Serial.write ('r');
+  Serial.write (id >> 8);
+  Serial.write (id);
+  Serial.write (len);
+}
+
+void write_float (float f) {
+  Serial.write (&f, 4);
+}
+
+void write_stepcount (stepcount_t s) {
+  Serial.write (&s, 4);
+}
+
 /* startCommand will pop the next command off the input buffer, figure out what it is, and get it running. */
 void startCommand () {
   unsigned char com[COMMAND_SIZE];
@@ -163,6 +184,188 @@ void startCommand () {
   int j = 0;
   int freq = 0;
   unsigned long time = 0;
+  float dat[4];
+  dat[0] = getFloat (&com[3]);
+  dat[1] = getFloat (&com[7]);
+  dat[2] = getFloat (&com[11]);
+  dat[3] = getFloat (&com[15]);
+  unsigned int id = (((unsigned int) com[1]) << 8) | com[2];
+  
+  switch (com[0]) 
+    case 0:  // NOP
+      command_running = false;
+      break;
+    case 1:  // MOVA
+      timer_mode = MOTION_MODE;
+      motion.startLinearMove (dat[0], dat[1], dat[2], dat[3]);
+      break;
+    case 2:  // MOVR
+      timer_mode = MOTION_MODE;
+      motion.startLinearMove (motion.vpos[0] + dat[0], motion.vpos[1] + dat[1], motion.vpos[2] + dat[2], dat[3]);
+      break;
+    case 3:  // MARC
+      timer_mode = MOTION_MODE;
+      motion.startHelicalMove (dat[0], dat[1], dat[2], 0, dat[3]);
+      break;
+    case 4:  // MHLX
+      timer_mode = MOTION_MODE;
+      motion.startHelicalMove (dat[0], dat[1], dat[2], dat[3], motion.feedrate);
+      break;
+    case 5:  // HOME
+      motion.homeAxes (com[3]);
+      command_running = false;
+      break;
+    case 6:  // CLWO
+      motion.worigin[0] = 0;
+      motion.worigin[1] = 0;
+      motion.worigin[2] = 0;
+      command_running = false;
+      break;
+    case 7:  // SWOX
+      motion.setWorkingOrigin (dat[0], 0);
+      command_running = false;
+      break;
+    case 8:  // SWOY
+      motion.setWorkingOrigin (0, dat[0]);
+      command_running = false;
+      break;
+    case 9:  // CROT
+      motion.setRotation (0);
+      command_running = false;
+      break;
+    case 10:  // SROT
+      motion.setRotation (dat[0]);
+      command_running = false;
+      break;
+    case 11:  // EDGX
+      motion.edgefind (dat[0], 0);
+      command_running = false;
+      break;
+    case 12:  // EDGY
+      motion.edgefind (dat[0], 1);
+      command_running = false;
+      break;
+    case 13:  // EFMX
+      motion.edgefindMidpoint (dat[0], dat[1], dat[2], com[15] == 0, 0);
+      command_running = false;
+      break;
+    case 14:  // EFMY
+      motion.edgefindMidpoint (dat[0], dat[1], dat[2], com[15] == 0, 1);
+      command_running = false;
+      break;
+    case 15:  // EF2X
+      motion.edgefind2 (dat[0], dat[1], dat[2], com[15] == 0, 0);
+      command_running = false;
+      break;
+    case 16:  // EF2Y
+      motion.edgefind2 (dat[0], dat[1], dat[2], com[15] == 0, 1);
+      command_running = false;
+      break;
+    case 17:  // STPE
+      digitalWrite (ENABLE, HIGH);
+      command_running = false;
+      break;
+    case 18:  // STPD
+      digitalWrite (ENABLE, LOW);
+      command_running = false;
+      break;
+    case 19:  // SPNE
+      digitalWrite (SPINDLE_POWER, HIGH);
+      command_running = false;
+      break;
+    case 20:  // SPND
+      digitalWrite (SPINDLE_POWER, LOW);
+      command_running = false;
+      break;
+    case 21:  // SSPS
+      // complicated
+    case 22:  // WAIT
+      time = (((unsigned long) com[3]) << 8) + com[4];
+      time = (unsigned long) (time * 15.625f);  // now we're in units of 64 usec.
+      if (time > 65535) {
+        ntimer_wraps = (unsigned long) (time >> 16);
+        timer_leftovers = (unsigned int) time;
+      }
+      
+      timer_mode = WAIT_MODE;
+      TCCR1A = 0;
+      TCCR1B = bit(WGM12) | bit(CS12) | bit(CS10);  // 1024x prescaling gives 1 click = 64 usec.
+      OCR1A = ntimer_wraps == 0 ? timer_leftovers : 65535;
+      TCNT1 = 0;
+      TIMSK1 = bit(OCIE1A);  
+      break;
+      
+    case 23:  // WUSR
+      motion.resume = false;
+      digitalWrite (RESUME_LED, HIGH);
+      while (!motion.checkResume()) {
+        delay(100);
+      }
+      digitalWrite (RESUME_LED, LOW);
+      motion.resume = false;
+      command_running = false;
+      break;
+      
+    case 24:  // BEEP
+      time = (((unsigned long) com[5]) << 8) + com[6];
+      freq = (((unsigned int) com[3]) << 8) + com[4];
+      freq *= 2;
+      ntimer_wraps = (freq * time)/1000;
+      timer_mode = BEEP_MODE;
+      TCCR1A = 0;
+      TCCR1B = bit(WGM12) | bit (CS12);  // 256x prescaling gives 1 click = 16 usec
+      OCR1A = (unsigned int) (62500.0f/freq);
+      TCNT1 = 0;
+      TIMSK1 = bit(OCIE1A);
+      break;
+      
+    case 25:  // QPOS
+      response_header (id, 12);
+      write_float (motion.vpos[0]);
+      write_float (motion.vpos[1]);
+      write_float (motion.vpos[2]);
+      command_running = false;
+      break;
+    case 26:  // QABS
+      response_header (id, 12);
+      write_stepcount (motion.steppos[0]);
+      write_stepcount (motion.steppos[1]);
+      write_stepcount (motion.steppos[2]);
+      command_running = false;
+      break;
+    case 27:  // QWOR
+      response_header (id, 12);
+      write_float (motion.worigin[0]);
+      write_float (motion.worigin[1]);
+      write_float (motion.worigin[2]);
+      command_running = false;
+      break;
+    case 28:  // QROT
+      response_header (id, 4);
+      write_float (motion.rotation);
+      command_running = false;
+      break;
+    case 29:  // QEND
+      response_header (id, 1);
+      Serial.write (motion.checkEndstops());
+      command_running = false;
+      break;
+    case 30:  // QSPS
+      response_header (id, 4);
+      write_float ((float) analogRead (SPINDLE_SPEED));
+      command_running = false;
+      break;
+    case 31:  // ECHO
+      // length
+      if (com[3] > 15) com[3] = 15;
+      response_header (id, com[3]);
+      Serial.write (&com[4], com[3]);
+      command_running = false;
+      break;
+    case 255:  // STOP
+      break;    
+  
+  /*
   switch (com[0]) {
     float x,y,z,f;
     case 0:  // NOP
@@ -292,5 +495,6 @@ void startCommand () {
     case 255:  // estop
       break;
   }
+  */
 }
 

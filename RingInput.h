@@ -4,7 +4,7 @@
 
 #define INBUF_SIZE 16	// number of commands in the input buffer
 
-#define COMMAND_SIZE 11  // number of bytes in a command
+#define COMMAND_SIZE 20  // number of bytes in a command
 
 class RingInput {
   private:

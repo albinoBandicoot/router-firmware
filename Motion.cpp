@@ -4,9 +4,13 @@
 Motion::Motion (int x) {
   int i;
   for (i = 0; i < 3; i++) {
-    pos[i] = 0;
-    target[i] = 0;
+    steppos[i] = 0;
+    abspos[i] = 0;
+    vpos[i] = 0;
+    worigin[i] = 0;
   }
+  setRotation (0);
+  feedrate = 2.0f;  // a sane default just in case
   state = STOPPED;
   resume = false;
   abort = ABORT_STATUS_CLEAR;
@@ -21,6 +25,10 @@ void Motion::begin () {
   pinMode (YDIR,  OUTPUT);
   pinMode (ZDIR,  OUTPUT);
   pinMode (ENABLE, OUTPUT);
+  pinMode (SPINDLE_POWER, OUTPUT);
+  pinMode (SPINDLE_SPEED, INPUT);
+  
+  digitalWrite (SPINDLE_POWER, LOW);
   
   pinMode (RESUME, INPUT_PULLUP);
   pinMode (RESUME_LED, OUTPUT);
@@ -32,6 +40,8 @@ void Motion::begin () {
   pinMode (XLIMIT, INPUT_PULLUP);
   pinMode (YLIMIT, INPUT_PULLUP);
   pinMode (ZLIMIT, INPUT_PULLUP);
+  
+  pinMode (EDGEFINDER, INPUT_PULLUP);
   
   // set up endstop interrupts
   PCMSK0 = bit(XLIMIT - 8) | bit(YLIMIT - 8) | bit(ZLIMIT - 8); // set pin change interrupts mask to only include the limit switches
@@ -102,42 +112,74 @@ boolean Motion::checkResume () {
   return resume;
 }
   
+void Motion::skewcomp (pos_t &x, pos_t &y) {
+  y -= x * SKEW;  // 50% chance the sign is wrong
+}
+
+void Motion::wocscomp (pos_t &x, pos_t &y, pos_t &z) {
+  pos_t xsave = x;
+  x = rot_matrix[0][0]*x + rot_matrix[0][1]*y;
+  y = rot_matrix[1][0]*xsave + rot_matrix[1][1]*y;
+  x -= worigin[0];
+  y -= worigin[1];
+  z -= worigin[2];
+}
 
 /* Here's the stuff that actually controls the steppers and makes a move happen */
 
-volatile unsigned long stepcounts[3];
+volatile stepcount_t relsteppos[3];  // holds the relative # of steps from the beginning of the move
+volatile stepcount_t linearmove_deltas[3];
 volatile boolean towards_endstop[3];
 volatile char active_axes = 0;
 
+/* Helix params */
+volatile float stheta, dtheta, radius, pitch;
+volatile stepcount_t[3] cpoint;
+volatile char[3] prevdirs;
+
 volatile float ticks_done = 0;
 volatile float ticks_total = 0;
-volatile ulong steps_done[3];
-volatile float amt_done = 0;  // ranges from 0 to 1 indicating progress along the move.
+volatile float time_done = 0;  // ranges from 0 to 1 indicating time progress along the move.
+volatile float amt_done = 0;   // ranges from 0 to 1 indicating position progress
 
 
-/* This will set up the targets etc. for a move and start the timer going. The
+/* This will set up the targets etc. for a linear move and start the timer going. The
 * actual motion control has to happen through interrupts, because we can't afford
 * to have the software block for the duration of the move (suspending serial communication)
+*
+* The coordinates are specified in fully transformed space, but we need to compute actual 
+* step differences. First we de-rotate, then translate so the origin is at the true origin
+* rather than the working origin, then de-skew and convert to steps.
 */
-void Motion::startMove (pos_t xt, pos_t yt, pos_t zt, float feedrate){
+void Motion::startLinearMove (pos_t xt, pos_t yt, pos_t zt, float tfeed){
   if (state == STOPPED) {	// check to make sure we're not already moving or homing
-    state = MOVING;
-    target[0] = xt;
-    target[1] = yt;
-    target[2] = zt;
-    float diffs[3];
+    state = MOVING_LINEAR;
+    target_feedrate = tfeed;
+    
+    wocscomp (xt, yt, zt);
+    skewcomp (xt, yt);
+    
+    pos_t diffs[3];
+    diffs[0] = xt - steppos[0] * UNITS_PER_STEP[0];
+    diffs[1] = yt - steppos[1] * UNITS_PER_STEP[1];
+    diffs[2] = zt = steppos[2] * UNITS_PER_STEP[2];
+    
+    stepcount_t target[3];
+    target[0] = (stepcount_t) (xt * STEPS_PER_UNIT[0]);
+    target[1] = (stepcount_t) (yt * STEPS_PER_UNIT[1]);
+    target[2] = (stepcount_t) (zt * STEPS_PER_UNIT[2]);
+    
     int i;
 	// first compute how far we have to go, and figure out which direction
 	// we need to turn the steppers and set the direction signals appropriately
     for (i=0; i < 3; i++) {
-      diffs[i] = target[i] - pos[i];
       towards_endstop[i] = diffs[i] < 0;
       digitalWrite (DIR[i], (diffs[i] < 0 ^ INVERT[i]) ? HIGH : LOW);
     }
     
 	// compute the length in mm of the line along which we're moving
-    float len = sqrt (diffs[0]*diffs[0] + diffs[1]*diffs[1] + diffs[2]*diffs[2]);
-    float total_time = len / feedrate;	// time in seconds for the move
+    float len = sqrt (diffs[0]*diffs[0] + diffs[1]*diffs[1] + diffs[2]*diffs[2]);  // this is in mm
+    float total_time = len / ((feedrate+target_feedrate) / 2);	// time in seconds for the move
     ticks_total = ceil(total_time * MOTION_TIMER_BLOCK_FREQ);	// time in timer ticks for the move
 	// here we figure out which axes are active (are moving) and compute how many steps 
 	// we need to take on each axis.
@@ -146,7 +188,7 @@ void Motion::startMove (pos_t xt, pos_t yt, pos_t zt, float feedrate){
       if (diffs[i] != 0) {
         active_axes |= bit(i);
       }
-      stepcounts[i] = (ulong) fabs (diffs[i] * STEPS_PER_UNIT[i]);
+      linearmove_deltas[i] = steppos[i] - target[i]
     }
     
 	// now we set up the timer. 
@@ -156,6 +198,46 @@ void Motion::startMove (pos_t xt, pos_t yt, pos_t zt, float feedrate){
     TIMSK1 = bit (OCIE1A);
   }
 }
+
+/* NOTE: as it currently stands, helical moves are NOT SKEW-CORRECTED */
+void Motion::startHelicalMove (float r, float sth, float dth, float lead, float tfeed) {
+  if (state == STOPPED) {
+    state = MOVING_HELICAL;
+    target_feedrate = tfeed;
+    active_axes = (lead == 0) ? 3 : 7;  // Z only active if lead is nonzero; X and Y always active
+   
+    sth += rotation;  // compensate for rotation. Is the sign correct here?
+   
+    // set the global helix parameters for access in tick_helical
+    pitch = lead * 0.15915494f;  // we want delta Z per radian, not per revolution
+    stheta = sth;
+    dtheta = dth;
+    radius = r;
+    
+    /* The arc length of a helix is given by T * sqrt(r^2 + b^2), where T is the # of radians of rotation,
+     * r is the radius, and b = lead/2pi. This corresponds to the parameterization t --> (r*cos(t), r*sin(t), bt) 
+     * Unfortunately, this does not take into acount any differences introduced by skew compensation. */
+    
+    float len = abs (dtheta * sqrt(r*r + pitch*pitch));
+    float total_time = len / ((feedrate + target_feedrate) / 2);
+    ticks_total = ceil (total_time * HELIX_MOTION_TIMER_BLOCK_FREQ);
+    
+    cpoint[0] = abspos[0] - r * cos(stheta);
+    cpoint[1] = abspos[1] - r * sin(stheta);
+    cpoint[2] = abspos[2];  // current Z
+    
+    prevdirs[0] = 0;
+    prevdirs[1] = 0;
+    previdrs[2] = 0;
+    
+    /* Timer setup */
+    TCCR1A = 0;
+    TCCR1B = bit(WGM12) | bit(CS10) | bit(CS11);  // CTC, 64x prescaling. Resolution = 4 usec, max time about 0.25 sec.
+    OCR1A = HELIX_MOTION_TIMER_COUNT_TARGET;
+    TIMSK1 = bit (OCIE1A);
+  }
+}
+
 
 /* While a move is active, the motion timer will go off every MOTION_TIMER_BLOCK_FREQ microseconds.
 * We use the 16 bit timer #1; this is also used for other things (wait commands, and the speaker).
@@ -177,25 +259,27 @@ void Motion::startMove (pos_t xt, pos_t yt, pos_t zt, float feedrate){
 * the feedrate would not be as high as expected, and since this timer interrupt has a higher
 * priority than the serial communication interrupt, no comms could happen during the move.
 */
-void Motion::tick () {  // called from ISR. Interrupts are disabled.
+void Motion::tick_linear () {  // called from ISR. Interrupts are disabled.
   ticks_done ++;
-  amt_done = ticks_done / ticks_total;  // could just add 1/ticks_total each time, 
+  time_done = ticks_done / ticks_total;  // could just add 1/ticks_total each time, 
   // which could be precomputed to avoid doing an expensive division each tick, shortening the
   // time interrupts are disabled, but accumulated roundoff error could be significant.
+  amt_done = (feedrate*(time_done-1) + target_feedrate) / (feedrate + target_feedarte);  // we may be accelerating, so compute the proportion of the move we should have completed by this time
+  // now compute the 
   
   int i;
   char endst = checkEndstops();
   for (i=0; i < 3; i++) {
-    if ((active_axes & (1 << i)) && floor(amt_done * stepcounts[i]) > steps_done[i]) {	// then we need to step this axis
+    if ((active_axes & (1 << i)) && floor(amt_done * linearmove_deltas[i]) > relsteppos[i]) {	// then we need to step this axis
       boolean es_ok;
       if (towards_endstop[i]) {	// if we're going toward the endstop, check whether it's triggered
         es_ok = (endst & (1 << i)) == 0;	
       } else {	// if we're going away, check whether our position would put us past the end of the axis travel
-        es_ok = (pos[i]*(1-amt_done) + target[i]*amt_done) < COORD_MAX[i];
+        es_ok = steppos[i] + relsteppos[i] < COORD_MAX[i]; 
       }
       if (es_ok) {
         pulse (STEP[i]);
-        steps_done[i]++;
+        relsteppos[i] += (linearmove_deltas[i] > 0) ? 1 : -1;
       } else {
 		// we really should never hit an endstop during a move. You should have a really good 
 		// reason to set the endstop policy to anything other than EP_ABORT, which will shut everything down. 
@@ -213,19 +297,55 @@ void Motion::tick () {  // called from ISR. Interrupts are disabled.
   }
 }
 
+void Motion::tick_helical () {
+  ticks_done ++;
+  time_done = ticks_done / total_time;
+  amt_done =  (feedrate*(time_done-1) + target_feedrate) / (feedrate + target_feedarte);
+  
+  float theta = stheta + amt_done * (etheta - stheta);
+  
+  tar[0] = cpoint[0] + (stepcount_t) (radius * cos(theta) * STEPS_PER_UNIT[0]);
+  tar[1] = cpoint[1] + (stepcount_t) (radius * sin(theta) * STEPS_PER_UNIT[1]);
+  tar[2] = (stepcount_t) (cpoint[2] + (pitch * amt_done * dtheta * STEPS_PER_UNIT[2]));
+
+  int i;
+  char endst = checkEndstops();
+  for (i=0; i < 3; i++) {
+    if (active_axes & (1 << i)) {
+      if ((endst & (1 << i)) == 0 && steppos[i] + relsteppos[i] < COORD_MAX[i]) {
+        stepcount_t delta = tar[i] - (steppos[i] + relsteppos[i]);
+        if (delta != 0) {
+          if (delta != prevdirs[i]) {
+            digitalWrite (DIRS[i], (delta > 0) ? HIGH: LOW);  // CHECK SIGN
+            prevdirs[i] = delta > 0 ? 1 : -1;
+          }
+          pulse (STEP[i]);
+          relsteppos[i] += delta;
+        }
+      }
+    }
+  }
+}
+
+void Motion::tick () {
+  if (state == MOVING_LINEAR) {
+    tick_linear();
+  } else if (state == MOVING_HELICAL) {
+    tick_helical();
+  }
+}
+
 // shut down the timer and clean everything up for the next move
 void Motion::cleanup () {
   TIMSK1 = 0;
   ticks_done = 0;
+  time_done = 0;
+  amt_done = 0;
+  feedrate = target_feedrate;
   int i;
   for (i = 0; i < 3; i++) {
-  // note that here we don't just set the position to the target: if moves don't consist of 
-  // an integer number of steps, the target position is not actually exactly where we ended up. 
-  // This error would accumulate over the course of the job, and with carefully constructed move 
-  // sequences could grow by up to 1 step per move. After only a hundred moves the error would be
-  // over 1 millimeter, which is completely unacceptable. 
-    pos[i] += steps_done[i] * (1.0f/STEPS_PER_UNIT[i]) * (towards_endstop[i] ? -1 : 1);
-    steps_done[i] = 0;
+    steppos[i] += relsteppos[i]; 
+    relsteppos[i] = 0;
   }
   state = STOPPED;
 }
@@ -276,6 +396,69 @@ void Motion::homingMoveAway (char axes, int step_delay) {
     delayMicroseconds (step_delay);
     e = checkEndstops();
   }
+}
+
+/* Edgefinding */
+// TODO: add endstop checks to edgefind routines; abort on endstops or max travel hit
+
+void Motion::ef_mov (stepcount_t target, char axis) {
+  stepcount_t delta = target - steppos[axis];
+  digitalWrite (DIR[axis], (delta > 0 ^ INVERT[axis]) ? HIGH : LOW);  // CHECK SIGN
+  int delay_us = (int) (1000000.0f / (EDGEFIND_TRAVEL_FEEDRATE * STEPS_PER_UNIT[axis]));
+  while (steppos[axis] != target) {
+    pulse (STEP[axis]);
+    delayMicroseconds (delay_us);
+    steppos[axis] += (delta > 0) ? 1 : -1;  
+  }
+}
+
+void Motion::edgefind (float max_travel, char axis) {
+  digitalWrite (DIR[axis], (max_travel > 0 ^ INVERT[i]) ? HIGH : LOW);  // CHECK SIGN
+  char e = checkEdgefinder ();
+  int delay_us = (int) (1000000.0f / (EDGEFIND_FEEDRATE * STEPS_PER_UNIT[i]));
+  stepcount_t max_travel_steps = STEPS_PER_UNIT[i] * abs(max_travel);
+  stepcount_t dist_travelled = 0;
+  while (!e && dist_travelled < max_travel_steps) {
+    pulse (STEP[axis]);
+    delayMicroseconds (delay_us);
+    e = checkEdgefinder ();
+    dist_travelled ++;
+}
+
+void Motion::edgefindMidpoint (float max_travel1, float max_travel2, float length, boolean zlift, char axis) {
+  edgefind (max_travel1, axis);
+  stepcount_t start_pos = steppos[axis];
+  
+  stepcount_t zpos = steppos[2];
+  if (zlift) ef_mov (ZLIFT_STEPPOS, 2);
+  ef_mov (steppos[axis] + (stepcount_t) (length * STEPS_PER_UNIT[axis]));
+  if (zlift) ef_mov (zpos, 2);
+  
+  edgefind (max_travel2, axis);
+  stepcount_t end_pos = steppos[axis];
+  
+  if (zlift) ef_mov (ZLIFT_STEPPOS, 2);
+  ef_mov ((start_pos + end_pos)/2, axis);
+}
+
+void Motion::edgefind2 (float max_travel, float backoff, float length, boolean zlift, char long_axis) {
+  char short_axis = (long_axis + 1) % 2;
+  edgefind (max_travel, short_axis);
+  ef_mov ( (stepcount_t) ((backoff * STEPS_PER_UNIT[short_axis]) * (max_travel > 0 ? -1 : 1)), short_axis);
+  stepcount_t pos1 = steppos[short_axis];
+  
+  stepcount_t zpos = steppos[2];
+  if (zlift) ef_mov (ZLIFT_STEPPOS, 2);
+  ef_mov (steppos[long_axis] + (stepcount_t) (length * STEPS_PER_UNIT[long_axis]));
+  if (zlift) ef_mov (zpos, 2);
+  
+  edgefind (max_travel, short_axis);
+  stepcount_t pos2 = steppos[short_axis];
+  float sdiff = (pos2 - pos1) * UNITS_PER_STEP[short_axis];
+  
+  // do we really want to set the rotation here?
+  setRotation (-tan(sdiff/length));  // CHECK SIGN
+  
 }
 
 void Motion::setDirections (boolean towards_endstops) {

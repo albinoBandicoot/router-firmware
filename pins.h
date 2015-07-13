@@ -26,5 +26,8 @@ const int DIR[3]  = {XDIR, YDIR, ZDIR};
 #define SPINDLE_SPEED A0  // for reading; can't set speed through this.
 #define SPEAKER A1
 
+#define SPINDLE_POWER 9
+#define EDGEFINDER A3
+
 
 #endif
