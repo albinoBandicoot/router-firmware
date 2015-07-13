@@ -153,7 +153,7 @@ ISR (TIMER1_COMPA_vect) {
   }
 }
 
-float getFloat (char *x) {
+float getFloat (unsigned char *x) {
   unsigned long f = (((unsigned long) x[0]) << 24) | (((unsigned long) x[1]) << 16) | (((unsigned long) x[2]) << 8) | ((unsigned long) x[3]);
   return * ((float *) &f);
 }
@@ -166,11 +166,11 @@ void response_header (int id, int len) {
 }
 
 void write_float (float f) {
-  Serial.write (&f, 4);
+  Serial.write ((uint8_t *) &f, 4);
 }
 
 void write_stepcount (stepcount_t s) {
-  Serial.write (&s, 4);
+  Serial.write ((uint8_t *) &s, 4);
 }
 
 /* startCommand will pop the next command off the input buffer, figure out what it is, and get it running. */
@@ -191,7 +191,7 @@ void startCommand () {
   dat[3] = getFloat (&com[15]);
   unsigned int id = (((unsigned int) com[1]) << 8) | com[2];
   
-  switch (com[0]) 
+  switch (com[0]) {
     case 0:  // NOP
       command_running = false;
       break;
@@ -254,7 +254,7 @@ void startCommand () {
       command_running = false;
       break;
     case 15:  // EF2X
-      motion.edgefind2 (dat[0], dat[1], dat[2], com[15] == 0, 0);
+      motion.edgefind2 (dat[0], dat[1], dat[2], com[15] == 0, (char) 0);
       command_running = false;
       break;
     case 16:  // EF2Y
@@ -494,7 +494,7 @@ void startCommand () {
       break;
     case 255:  // estop
       break;
-  }
   */
+  }
 }
 

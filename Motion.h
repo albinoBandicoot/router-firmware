@@ -50,7 +50,7 @@ class Motion {
     float feedrate;    // current feedrate, mm/s
     float target_feedrate;
     float rotation;    // amount of rotation compensation; radians. This is the correction, not the deviation.
-    float[2][2] rot_matrix;  // matrix implementing the correction.
+    float rot_matrix[2][2];  // matrix implementing the correction.
     
     char state;			// will be one of STOPPED, MOVING, or HOMING
     char abort;			// will be one of the ABORT_STATUS_xx above. 
@@ -60,6 +60,7 @@ class Motion {
     void begin();
     char checkEndstops (); 
     boolean checkResume ();
+    boolean checkEdgefinder ();
     
     void skewcomp (pos_t &x, pos_t &y);
     void wocscomp (pos_t &x, pos_t &y, pos_t &z);  // working origin coordinate system compensation. does the wocs -> global direction.
@@ -69,7 +70,7 @@ class Motion {
     
     void edgefind (float max_travel, char axis);
     void edgefindMidpoint (float max_travel1, float max_travel2, float length, boolean liftz, char axis);
-    void edgefind2 (float max_travel, float length, boolean liftz, char axis);
+    void edgefind2 (float max_travel, float backoff, float length, boolean liftz, char axis);
     
     void startLinearMove (pos_t xt, pos_t yt, pos_t zt, float feedrate);
     void startHelicalMove (float r, float stheta, float etheta, float lead, float feedrate);

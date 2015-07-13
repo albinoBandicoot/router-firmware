@@ -19,9 +19,9 @@ const unsigned int COORD_MAX[3] = {XMAX * STEPS_PER_UNIT[0], YMAX*STEPS_PER_UNIT
 #define HOMING_STEP_DELAY 2000			// = 6.25 mm/sec for x and y axes, 1.5625 mm/sec for Z
 #define SLOW_HOMING_STEP_DELAY 8000		// = 1.5625 mm/sec for x and y, 0.39 mm/sec for Z
 #define EDGEFIND_FEEDRATE 1.0f    // mm/s
-#define EDGEFIND_TRAVEL_FEEDRATE 4.0f;
+#define EDGEFIND_TRAVEL_FEEDRATE 4.0f
 #define ZLIFT_POS  1.0f          // this is the Z coordinate to which the Z axis will be lifted, eg. on edgefinding that requires a lift
-#define ZLIFT_STEPPOS  (long) (ZLIFT_POS * STEPS_PER_UNIT[2]);
+#define ZLIFT_STEPPOS  ((long) (ZLIFT_POS * STEPS_PER_UNIT[2]))
 
 /* The SKEW parameter is used to accommodate for any non-perpendicularity between the X and Y axes. If the axes
 are perfectly aligned, SKEW should be 0. Positive skew means travelling in the +X direction causes the Y to become

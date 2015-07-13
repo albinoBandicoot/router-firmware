@@ -111,6 +111,10 @@ boolean Motion::checkResume () {
   }
   return resume;
 }
+
+boolean Motion::checkEdgefinder () {
+  return true;
+}
   
 void Motion::skewcomp (pos_t &x, pos_t &y) {
   y -= x * SKEW;  // 50% chance the sign is wrong
@@ -125,6 +129,18 @@ void Motion::wocscomp (pos_t &x, pos_t &y, pos_t &z) {
   z -= worigin[2];
 }
 
+void Motion::setWorkingOrigin (float dx, float dy) {
+  // TODO: implement me!
+}
+
+void Motion::setRotation (float theta) {
+  rotation = theta;
+  rot_matrix[0][0] = cos(theta);
+  rot_matrix[0][1] = -sin(theta);
+  rot_matrix[1][0] = sin(theta);
+  rot_matrix[1][1] = cos(theta);
+}
+
 /* Here's the stuff that actually controls the steppers and makes a move happen */
 
 volatile stepcount_t relsteppos[3];  // holds the relative # of steps from the beginning of the move
@@ -134,8 +150,8 @@ volatile char active_axes = 0;
 
 /* Helix params */
 volatile float stheta, dtheta, radius, pitch;
-volatile stepcount_t[3] cpoint;
-volatile char[3] prevdirs;
+volatile stepcount_t cpoint[3];
+volatile char prevdirs[3];
 
 volatile float ticks_done = 0;
 volatile float ticks_total = 0;
@@ -188,7 +204,7 @@ void Motion::startLinearMove (pos_t xt, pos_t yt, pos_t zt, float tfeed){
       if (diffs[i] != 0) {
         active_axes |= bit(i);
       }
-      linearmove_deltas[i] = steppos[i] - target[i]
+      linearmove_deltas[i] = target[i] - steppos[i];
     }
     
 	// now we set up the timer. 
@@ -228,7 +244,7 @@ void Motion::startHelicalMove (float r, float sth, float dth, float lead, float 
     
     prevdirs[0] = 0;
     prevdirs[1] = 0;
-    previdrs[2] = 0;
+    prevdirs[2] = 0;
     
     /* Timer setup */
     TCCR1A = 0;
@@ -264,7 +280,7 @@ void Motion::tick_linear () {  // called from ISR. Interrupts are disabled.
   time_done = ticks_done / ticks_total;  // could just add 1/ticks_total each time, 
   // which could be precomputed to avoid doing an expensive division each tick, shortening the
   // time interrupts are disabled, but accumulated roundoff error could be significant.
-  amt_done = (feedrate*(time_done-1) + target_feedrate) / (feedrate + target_feedarte);  // we may be accelerating, so compute the proportion of the move we should have completed by this time
+  amt_done = (feedrate*(time_done-1) + target_feedrate) / (feedrate + target_feedrate);  // we may be accelerating, so compute the proportion of the move we should have completed by this time
   // now compute the 
   
   int i;
@@ -299,11 +315,12 @@ void Motion::tick_linear () {  // called from ISR. Interrupts are disabled.
 
 void Motion::tick_helical () {
   ticks_done ++;
-  time_done = ticks_done / total_time;
-  amt_done =  (feedrate*(time_done-1) + target_feedrate) / (feedrate + target_feedarte);
+  time_done = ticks_done / ticks_total;
+  amt_done =  (feedrate*(time_done-1) + target_feedrate) / (feedrate + target_feedrate);
   
-  float theta = stheta + amt_done * (etheta - stheta);
+  float theta = stheta + amt_done * dtheta;
   
+  stepcount_t tar[3];
   tar[0] = cpoint[0] + (stepcount_t) (radius * cos(theta) * STEPS_PER_UNIT[0]);
   tar[1] = cpoint[1] + (stepcount_t) (radius * sin(theta) * STEPS_PER_UNIT[1]);
   tar[2] = (stepcount_t) (cpoint[2] + (pitch * amt_done * dtheta * STEPS_PER_UNIT[2]));
@@ -316,7 +333,7 @@ void Motion::tick_helical () {
         stepcount_t delta = tar[i] - (steppos[i] + relsteppos[i]);
         if (delta != 0) {
           if (delta != prevdirs[i]) {
-            digitalWrite (DIRS[i], (delta > 0) ? HIGH: LOW);  // CHECK SIGN
+            digitalWrite (DIR[i], (delta > 0) ? HIGH: LOW);  // CHECK SIGN
             prevdirs[i] = delta > 0 ? 1 : -1;
           }
           pulse (STEP[i]);
@@ -363,9 +380,14 @@ void Motion::homeAxes (char axes){
   homingMoveAway    (axes, HOMING_STEP_DELAY);  // back off
   homingMoveTowards (axes, SLOW_HOMING_STEP_DELAY);  // come back in slowly
   
-  pos[0] = 0;
-  pos[1] = 0;
-  pos[2] = 0;
+  int i = 0;
+  for (i=0; i < 3; i++) {
+    if (axes & (1 << i)) {
+      steppos[i] = 0;
+      vpos[i] = 0;
+      abspos[i] = 0;
+    }
+  }
   state = STOPPED;
 }
 
@@ -400,10 +422,11 @@ void Motion::homingMoveAway (char axes, int step_delay) {
 
 /* Edgefinding */
 // TODO: add endstop checks to edgefind routines; abort on endstops or max travel hit
+// - also need to update abspos and vpos after edgefinding
 
 void Motion::ef_mov (stepcount_t target, char axis) {
   stepcount_t delta = target - steppos[axis];
-  digitalWrite (DIR[axis], (delta > 0 ^ INVERT[axis]) ? HIGH : LOW);  // CHECK SIGN
+  //digitalWrite (DIR[axis], ((delta > 0) ^ INVERT[axis]) ? HIGH : LOW);  // CHECK SIGN
   int delay_us = (int) (1000000.0f / (EDGEFIND_TRAVEL_FEEDRATE * STEPS_PER_UNIT[axis]));
   while (steppos[axis] != target) {
     pulse (STEP[axis]);
@@ -413,16 +436,17 @@ void Motion::ef_mov (stepcount_t target, char axis) {
 }
 
 void Motion::edgefind (float max_travel, char axis) {
-  digitalWrite (DIR[axis], (max_travel > 0 ^ INVERT[i]) ? HIGH : LOW);  // CHECK SIGN
+  digitalWrite (DIR[axis], (max_travel > 0 ^ INVERT[axis]) ? HIGH : LOW);  // CHECK SIGN
   char e = checkEdgefinder ();
-  int delay_us = (int) (1000000.0f / (EDGEFIND_FEEDRATE * STEPS_PER_UNIT[i]));
-  stepcount_t max_travel_steps = STEPS_PER_UNIT[i] * abs(max_travel);
+  int delay_us = (int) (1000000.0f / (EDGEFIND_FEEDRATE * STEPS_PER_UNIT[axis]));
+  stepcount_t max_travel_steps = STEPS_PER_UNIT[axis] * abs(max_travel);
   stepcount_t dist_travelled = 0;
   while (!e && dist_travelled < max_travel_steps) {
     pulse (STEP[axis]);
     delayMicroseconds (delay_us);
     e = checkEdgefinder ();
     dist_travelled ++;
+  }
 }
 
 void Motion::edgefindMidpoint (float max_travel1, float max_travel2, float length, boolean zlift, char axis) {
@@ -431,7 +455,7 @@ void Motion::edgefindMidpoint (float max_travel1, float max_travel2, float lengt
   
   stepcount_t zpos = steppos[2];
   if (zlift) ef_mov (ZLIFT_STEPPOS, 2);
-  ef_mov (steppos[axis] + (stepcount_t) (length * STEPS_PER_UNIT[axis]));
+  ef_mov (steppos[axis] + (stepcount_t) (length * STEPS_PER_UNIT[axis]), axis);
   if (zlift) ef_mov (zpos, 2);
   
   edgefind (max_travel2, axis);
@@ -449,7 +473,7 @@ void Motion::edgefind2 (float max_travel, float backoff, float length, boolean z
   
   stepcount_t zpos = steppos[2];
   if (zlift) ef_mov (ZLIFT_STEPPOS, 2);
-  ef_mov (steppos[long_axis] + (stepcount_t) (length * STEPS_PER_UNIT[long_axis]));
+  ef_mov (steppos[long_axis] + (stepcount_t) (length * STEPS_PER_UNIT[long_axis]), long_axis);
   if (zlift) ef_mov (zpos, 2);
   
   edgefind (max_travel, short_axis);
