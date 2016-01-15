@@ -270,15 +270,17 @@ void startCommand () {
       command_running = false;
       break;
     case 19:  // SPNE
-      digitalWrite (SPINDLE_POWER, HIGH);
+//      digitalWrite (SPINDLE_POWER, HIGH);
       command_running = false;
       break;
     case 20:  // SPND
-      digitalWrite (SPINDLE_POWER, LOW);
+//      digitalWrite (SPINDLE_POWER, LOW);
       command_running = false;
       break;
     case 21:  // SSPS
       // complicated
+      // TODO: Implement setting spindle speed
+      break;
     case 22:  // WAIT
       time = (((unsigned long) com[3]) << 8) + com[4];
       time = (unsigned long) (time * 15.625f);  // now we're in units of 64 usec.

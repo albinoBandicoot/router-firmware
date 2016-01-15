@@ -15,6 +15,7 @@ const float UNITS_PER_STEP[3] = {0.0125f, 0.0125f, 0.003125f};  // keep these in
 #define ZMAX 80
 const unsigned int COORD_MAX[3] = {XMAX * STEPS_PER_UNIT[0], YMAX*STEPS_PER_UNIT[1], ZMAX*STEPS_PER_UNIT[2]};
 
+const int HOME_ENDSTOP_MASK[3] = {1, 2, 4};  // [ . . Zmax Ymax Xmax Zmin Ymin Xmin ]
 
 #define HOMING_STEP_DELAY 2000			// = 6.25 mm/sec for x and y axes, 1.5625 mm/sec for Z
 #define SLOW_HOMING_STEP_DELAY 8000		// = 1.5625 mm/sec for x and y, 0.39 mm/sec for Z

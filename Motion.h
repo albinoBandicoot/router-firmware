@@ -19,7 +19,6 @@
 #define MIN_RESUME_PRESS_LENGTH 1000  // milliseconds the resume button must be held down
 #define DEBOUNCE_TIME 80  // milliseconds, for endstops
 #define PULSE_WIDTH 8    // microseconds, for sending step pulses to the stepper drivers
-//#define DELAY_COMPENSATION 25  // microseconds, to account for the pulse delay and calculation time
 #define MOTION_TIMER_FREQ (F_CPU >> 6)  // using 64x prescale ==> 4 usec/tick
 #define MOTION_TIMER_COUNT_TARGET 50   // 200 usec between. reduce until it fails then back off
 #define MOTION_TIMER_BLOCK_FREQ (MOTION_TIMER_FREQ / MOTION_TIMER_COUNT_TARGET)

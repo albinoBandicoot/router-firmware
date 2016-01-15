@@ -25,10 +25,10 @@ void Motion::begin () {
   pinMode (YDIR,  OUTPUT);
   pinMode (ZDIR,  OUTPUT);
   pinMode (ENABLE, OUTPUT);
-  pinMode (SPINDLE_POWER, OUTPUT);
+//  pinMode (SPINDLE_POWER, OUTPUT);
   pinMode (SPINDLE_SPEED, INPUT);
   
-  digitalWrite (SPINDLE_POWER, LOW);
+//  digitalWrite (SPINDLE_POWER, LOW);
   
   pinMode (RESUME, INPUT_PULLUP);
   pinMode (RESUME_LED, OUTPUT);
@@ -37,14 +37,18 @@ void Motion::begin () {
   
   pinMode (SPEAKER, OUTPUT);
 
-  pinMode (XLIMIT, INPUT_PULLUP);
-  pinMode (YLIMIT, INPUT_PULLUP);
-  pinMode (ZLIMIT, INPUT_PULLUP);
+  pinMode (XLIMIT_MIN, INPUT_PULLUP);
+  pinMode (YLIMIT_MIN, INPUT_PULLUP);
+  pinMode (ZLIMIT_MIN, INPUT_PULLUP);
+  pinMode (XLIMIT_MAX, INPUT_PULLUP);
+  pinMode (YLIMIT_MAX, INPUT_PULLUP);
+  pinMode (ZLIMIT_MAX, INPUT_PULLUP);
   
   pinMode (EDGEFINDER, INPUT_PULLUP);
   
   // set up endstop interrupts
-  PCMSK0 = bit(XLIMIT - 8) | bit(YLIMIT - 8) | bit(ZLIMIT - 8); // set pin change interrupts mask to only include the limit switches
+  PCMSK0 = 0x3f;  // 00111111   --- all pins in group are now used
+  //PCMSK0 = bit(XLIMIT - 8) | bit(YLIMIT - 8) | bit(ZLIMIT - 8); // set pin change interrupts mask to only include the limit switches
   PCIFR |= bit(PCIF0);  // clear flag by writing 1 to it
   PCICR |= bit(PCIE0);  // enable pin change interrupts on pins 8-13
   
@@ -56,7 +60,7 @@ void Motion::begin () {
 
 // these variables keep track of the last times the endstops and resume button went LOW (pressed) 
 // for debouncing purposes
-volatile unsigned long lastActivation[3] = {0,0,0};
+volatile unsigned long lastActivation[6] = {0,0,0,0,0,0};
 volatile unsigned long lastResume = 0;
 
 /* Interrupt handler for endstops. This will get triggered whenever one of the endstop
@@ -64,9 +68,12 @@ volatile unsigned long lastResume = 0;
 * lastActivation with the current time. */
 ISR (PCINT0_vect) {
   unsigned long time = millis();
-  if (digitalRead (XLIMIT) == LOW) lastActivation[0] = time;
-  if (digitalRead (YLIMIT) == LOW) lastActivation[1] = time;
-  if (digitalRead (ZLIMIT) == LOW) lastActivation[2] = time;
+  if (digitalRead (XLIMIT_MIN) == LOW) lastActivation[0] = time;
+  if (digitalRead (YLIMIT_MIN) == LOW) lastActivation[1] = time;
+  if (digitalRead (ZLIMIT_MIN) == LOW) lastActivation[2] = time;
+  if (digitalRead (XLIMIT_MAX) == LOW) lastActivation[3] = time;
+  if (digitalRead (YLIMIT_MAX) == LOW) lastActivation[4] = time;
+  if (digitalRead (ZLIMIT_MAX) == LOW) lastActivation[5] = time;
 }
 
 /* Similar for the resume button */
@@ -80,18 +87,16 @@ ISR (PCINT1_vect) {
 * (we know this from the ISR above) and if it's been less than DEBOUNCE_TIME milliseconds,
 * consider the switch still pressed.
 *
-* The result is encoded in the low 3 bits of a byte as .....ZYX
+* The result is encoded in the low 6 bits of a byte as ..ZYXzyx
+* where the low 3 bits are the MIN endstops, and the next 3 bits are the MAX endstops.
 * a 1 bit indicates the switch is pressed.
 */
 char Motion::checkEndstops () {
   char res = 0;
-  if (digitalRead (XLIMIT) == LOW) res |= 1;
-  if (digitalRead (YLIMIT) == LOW) res |= 2;
-  if (digitalRead (ZLIMIT) == LOW) res |= 4;
   unsigned long time = millis();
   int i;
-  for (i=0; i < 3; i++) {
-    if (time - lastActivation[i] < DEBOUNCE_TIME) res |= (1 << i);
+  for (i=0; i < 6; i++) {
+    if (digitalRead (XLIMIT_MIN + i) == LOW || time - lastActivation[i] < DEBOUNCE_TIME) res |= (1 << i);
   }
   return res;
 }
@@ -273,7 +278,9 @@ void Motion::startHelicalMove (float r, float sth, float dth, float lead, float 
 * other things (communications), or worse, it won't even have enough time for itself to execute 
 * before the next interrupt comes in. Since interrupts are disabled here, what would happen is 
 * the feedrate would not be as high as expected, and since this timer interrupt has a higher
-* priority than the serial communication interrupt, no comms could happen during the move.
+* priority than the serial communication interrupt, no comms could happen during the move. (or
+* perhaps the timer would get confused and shut down after one cycle, as it did with the music
+* thing)
 */
 void Motion::tick_linear () {  // called from ISR. Interrupts are disabled.
   ticks_done ++;
@@ -287,12 +294,15 @@ void Motion::tick_linear () {  // called from ISR. Interrupts are disabled.
   char endst = checkEndstops();
   for (i=0; i < 3; i++) {
     if ((active_axes & (1 << i)) && floor(amt_done * linearmove_deltas[i]) > relsteppos[i]) {	// then we need to step this axis
+      boolean es_ok = (endst & (9 << i)) == 0;  // mask is 1001, which picks out the MIN and MAX for this axis
+      /*
       boolean es_ok;
       if (towards_endstop[i]) {	// if we're going toward the endstop, check whether it's triggered
         es_ok = (endst & (1 << i)) == 0;	
       } else {	// if we're going away, check whether our position would put us past the end of the axis travel
         es_ok = steppos[i] + relsteppos[i] < COORD_MAX[i]; 
       }
+      */
       if (es_ok) {
         pulse (STEP[i]);
         relsteppos[i] += (linearmove_deltas[i] > 0) ? 1 : -1;
@@ -329,7 +339,7 @@ void Motion::tick_helical () {
   char endst = checkEndstops();
   for (i=0; i < 3; i++) {
     if (active_axes & (1 << i)) {
-      if ((endst & (1 << i)) == 0 && steppos[i] + relsteppos[i] < COORD_MAX[i]) {
+      if ((endst & (9 << i)) == 0) {
         stepcount_t delta = tar[i] - (steppos[i] + relsteppos[i]);
         if (delta != 0) {
           if (delta != prevdirs[i]) {
@@ -400,9 +410,9 @@ void Motion::homingMoveTowards (char axes, int step_delay) {
   setDirections (true);
   char e = checkEndstops();
   while ((e & axes) != axes) {
-    if (~e & axes & 1) pulse (XSTEP);
-    if (~e & axes & 2) pulse (YSTEP);
-    if (~e & axes & 4) pulse (ZSTEP);
+    if (~e & axes & HOME_ENDSTOP_MASK[0]) pulse (XSTEP);
+    if (~e & axes & HOME_ENDSTOP_MASK[1]) pulse (YSTEP);
+    if (~e & axes & HOME_ENDSTOP_MASK[2]) pulse (ZSTEP);
     delayMicroseconds (step_delay);
     e = checkEndstops();
   }
@@ -412,16 +422,16 @@ void Motion::homingMoveAway (char axes, int step_delay) {
   setDirections (false);
   char e = checkEndstops();
   while ((e | ~axes) != ~axes) {
-    if (e & axes & 1) pulse (XSTEP);
-    if (e & axes & 2) pulse (YSTEP);
-    if (e & axes & 4) pulse (ZSTEP);
+    if (e & axes & HOME_ENDSTOP_MASK[0]) pulse (XSTEP);
+    if (e & axes & HOME_ENDSTOP_MASK[1]) pulse (YSTEP);
+    if (e & axes & HOME_ENDSTOP_MASK[2]) pulse (ZSTEP);
     delayMicroseconds (step_delay);
     e = checkEndstops();
   }
 }
 
 /* Edgefinding */
-// TODO: add endstop checks to edgefind routines; abort on endstops or max travel hit
+// TODO: 
 // - also need to update abspos and vpos after edgefinding
 
 void Motion::ef_mov (stepcount_t target, char axis) {
@@ -429,9 +439,14 @@ void Motion::ef_mov (stepcount_t target, char axis) {
   //digitalWrite (DIR[axis], ((delta > 0) ^ INVERT[axis]) ? HIGH : LOW);  // CHECK SIGN
   int delay_us = (int) (1000000.0f / (EDGEFIND_TRAVEL_FEEDRATE * STEPS_PER_UNIT[axis]));
   while (steppos[axis] != target) {
+    if (checkEndstops()) {
+      cleanup();
+      abort = ABORT_STATUS_ABORT;
+      return;
+    }
     pulse (STEP[axis]);
     delayMicroseconds (delay_us);
-    steppos[axis] += (delta > 0) ? 1 : -1;  
+    steppos[axis] += (delta > 0) ? 1 : -1;
   }
 }
 
